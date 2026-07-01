@@ -1,0 +1,4 @@
+- 2026-05-17: Backup locations confirmed for migration: tar backups are stored in /root/backups/ and staged copy exists at /opt/openclaw.
+- 2026-05-17: Created least-privilege service account `app-user` for future app workloads. Role: non-interactive app runtime owner (shell `/usr/sbin/nologin`), password-locked, no sudo; owns `/srv/app-user` and `/home/app-user`.
+- 2026-05-18: Installed and configured `code-server` on `https://<host>:40003/` with password auth; enabled systemd service `code-server@root`.
+- 2026-05-18: Opened UFW rule `40003/tcp` (IPv4 + IPv6) with comment `code-server-https`.

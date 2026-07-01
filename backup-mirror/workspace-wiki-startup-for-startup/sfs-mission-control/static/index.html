@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SFS Mission Control</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">S</div>
+        <div>
+          <h1>Mission Control</h1>
+          <p>Startup for Startup</p>
+        </div>
+      </div>
+      <div class="history-head">
+        <span>היסטוריית שאלות</span>
+        <button id="refreshHistory" class="icon-button" title="רענון">↻</button>
+      </div>
+      <div id="historyList" class="history-list" aria-live="polite"></div>
+    </aside>
+
+    <main class="workspace">
+      <section class="question-surface">
+        <form id="askForm" class="ask-form">
+          <textarea id="questionInput" placeholder="Ask your question" rows="3" required></textarea>
+          <div class="controls-row">
+            <label><input type="checkbox" id="sourceWiki" checked> wiki-llm</label>
+            <label><input type="checkbox" id="sourceObsidian" checked> obsidian</label>
+            <label><input type="checkbox" id="sourceRaw" checked> raw sources</label>
+            <button type="submit" id="askButton">שלח</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="statusBar" class="status-bar idle">
+        <span id="statusText">מוכן לשאלה.</span>
+        <span class="dots" aria-hidden="true"><span></span><span></span><span></span></span>
+      </section>
+
+      <section class="progress-panel" aria-label="progress log">
+        <h2>יומן התקדמות</h2>
+        <ol id="progressLog"></ol>
+      </section>
+
+      <section class="answer-panel">
+        <div class="answer-actions">
+          <button id="cancelButton" disabled>בטל</button>
+          <button id="rerunButton" disabled>הרץ שוב</button>
+          <button id="saveThreadButton" disabled>שמור ת'רד</button>
+        </div>
+        <div id="questionTitle" class="question-title">אין שאלה פתוחה</div>
+        <article id="summaryAnswer" class="summary-answer">התשובה המסכמת תופיע כאן.</article>
+      </section>
+
+      <section class="source-grid" aria-label="source boxes">
+        <article class="source-box" data-source="wikillm">
+          <header>
+            <h2>WikiLLM</h2>
+            <span id="wikillmStatus" class="source-status">waiting</span>
+          </header>
+          <div id="wikillmAnswer" class="source-answer"></div>
+          <div id="wikillmEvidence" class="evidence-list"></div>
+        </article>
+
+        <article class="source-box" data-source="obsidian">
+          <header>
+            <h2>Obsidian</h2>
+            <span id="obsidianStatus" class="source-status">waiting</span>
+          </header>
+          <div id="obsidianAnswer" class="source-answer"></div>
+          <div id="obsidianEvidence" class="evidence-list"></div>
+        </article>
+
+        <article class="source-box" data-source="raw">
+          <header>
+            <h2>Raw Sources</h2>
+            <span id="rawStatus" class="source-status">waiting</span>
+          </header>
+          <div id="rawAnswer" class="source-answer"></div>
+          <div id="rawEvidence" class="evidence-list"></div>
+        </article>
+      </section>
+
+      <footer id="sourcesFooter" class="sources-footer">Sources Used: none</footer>
+    </main>
+  </div>
+
+  <dialog id="citationDialog">
+    <form method="dialog">
+      <button class="dialog-close" value="close">×</button>
+      <h2>מקור</h2>
+      <div id="citationBody"></div>
+    </form>
+  </dialog>
+
+  <script src="/app.js"></script>
+</body>
+</html>

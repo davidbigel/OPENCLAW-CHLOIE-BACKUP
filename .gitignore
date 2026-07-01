@@ -1,0 +1,14 @@
+# Ignore everything by default.
+*
+.*
+
+# Keep repo control files.
+!.gitignore
+
+# Keep root OpenClaw config snapshots.
+!openclaw.json*
+
+# Keep the generated backup mirror tree.
+!backup-mirror/
+!backup-mirror/**
+

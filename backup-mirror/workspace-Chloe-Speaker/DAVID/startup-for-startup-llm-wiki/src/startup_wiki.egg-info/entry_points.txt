@@ -1,0 +1,2 @@
+[console_scripts]
+startup-wiki = startup_wiki.cli:main

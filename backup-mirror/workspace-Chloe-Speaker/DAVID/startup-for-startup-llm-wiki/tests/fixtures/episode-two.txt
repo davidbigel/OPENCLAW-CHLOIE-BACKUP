@@ -1,0 +1,9 @@
+# Hiring
+
+## Interviewing
+
+Hiring is a systems problem when the process repeats at scale.
+
+## Decision Making
+
+Teams should clarify tradeoffs before making a final offer.
