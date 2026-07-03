@@ -5,7 +5,6 @@ import os
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import UUID
 
 
 @dataclass(frozen=True)
@@ -26,10 +25,12 @@ class Config:
     snoracle_agent_id: str
     snoracle_session_id: str | None
     snoracle_route_label: str
+    snoracle_timeout_seconds: int
     allowed_origins: tuple[str, ...]
     db_path: Path
     log_dir: Path
     answers_dir: Path
+    runs_dir: Path
     static_dir: Path
     wikillm_dir: Path
     raw_dir: Path
@@ -53,37 +54,28 @@ def load_config() -> Config:
         os.environ.get("MC_PUBLIC_TLS_KEY"),
         tls_root / "public.key",
     )
-    public_scheme = "https" if public_tls_cert and public_tls_key else "http"
+    public_scheme = "https"
     public_password = os.environ.get("MC_PUBLIC_PASSWORD", "3d20")
     cookie_secret = os.environ.get("MC_COOKIE_SECRET") or _runtime_secret(runtime_root, "cookie_secret")
     internal_secret = os.environ.get("MC_INTERNAL_SECRET") or _runtime_secret(runtime_root, "internal_secret")
     snoracle_mode = os.environ.get("MC_SNORACLE_MODE", "openclaw").strip().lower()
-    snoracle_agent_id = (
-        os.environ.get("MC_SNORACLE_AGENT_ID", "").strip()
-        or _agent_id_from_session_key(os.environ.get("MC_SNORACLE_SESSION_KEY"))
-        or _discover_current_agent_id(workspace_root)
-    )
-    snoracle_session_id = _resolve_session_id(
-        os.environ.get("MC_SNORACLE_SESSION_ID") or os.environ.get("MC_SNORACLE_SESSION_KEY")
-    )
-    if snoracle_session_id:
-        snoracle_route_label = f"session-id:{snoracle_session_id}"
-    else:
-        snoracle_route_label = f"agent:{snoracle_agent_id}:main"
+    snoracle_agent_id = os.environ.get("MC_SNORACLE_AGENT_ID", "").strip() or "wiki-startup-for-startup"
+    snoracle_session_id = None
+    snoracle_route_label = f"agent:{snoracle_agent_id}:per-question"
+    snoracle_timeout_seconds = int(os.environ.get("MC_SNORACLE_TIMEOUT_SECONDS", "300"))
 
     allowed = set()
-    for scheme in {"http", "https"}:
-        allowed.update(
-            {
-                f"{scheme}://187.124.10.241:{public_port}",
-                f"{scheme}://localhost:{public_port}",
-                f"{scheme}://127.0.0.1:{public_port}",
-            }
-        )
+    allowed.update(
+        {
+            f"https://187.124.10.241:{public_port}",
+            f"https://localhost:{public_port}",
+            f"https://127.0.0.1:{public_port}",
+        }
+    )
     extra_origins = os.environ.get("MC_ALLOWED_ORIGINS", "")
     for item in extra_origins.split(","):
         item = item.strip()
-        if item:
+        if item.startswith("https://"):
             allowed.add(item)
 
     return Config(
@@ -103,10 +95,12 @@ def load_config() -> Config:
         snoracle_agent_id=snoracle_agent_id,
         snoracle_session_id=snoracle_session_id,
         snoracle_route_label=snoracle_route_label,
+        snoracle_timeout_seconds=snoracle_timeout_seconds,
         allowed_origins=tuple(sorted(allowed)),
         db_path=runtime_root / "mission-control.sqlite3",
         log_dir=runtime_root / "logs",
         answers_dir=runtime_root / "answers",
+        runs_dir=runtime_root / "runs",
         static_dir=app_root / "static",
         wikillm_dir=workspace_root / "kb" / "wikillm",
         raw_dir=workspace_root / "kb" / "sources" / "raw",
@@ -142,39 +136,3 @@ def _optional_runtime_path(value: str | None, default_path: Path) -> Path | None
         return path if path.exists() else None
     return default_path if default_path.exists() else None
 
-
-def _discover_current_agent_id(workspace_root: Path) -> str:
-    codex_home = os.environ.get("CODEX_HOME", "").strip()
-    if codex_home:
-        parts = Path(codex_home).resolve().parts
-        try:
-            agents_index = parts.index("agents")
-        except ValueError:
-            agents_index = -1
-        if agents_index >= 0 and agents_index + 1 < len(parts):
-            return parts[agents_index + 1]
-    name = workspace_root.name
-    if name.startswith("workspace-") and len(name) > len("workspace-"):
-        return name.removeprefix("workspace-")
-    return "main"
-
-
-def _resolve_session_id(value: str | None) -> str | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        UUID(text)
-    except ValueError:
-        return None
-    return text
-
-
-def _agent_id_from_session_key(value: str | None) -> str | None:
-    text = str(value or "").strip()
-    if not text.startswith("agent:"):
-        return None
-    parts = text.split(":")
-    if len(parts) < 3 or not parts[1].strip():
-        return None
-    return parts[1].strip()

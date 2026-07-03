@@ -234,40 +234,6 @@ textarea:focus {
   color: var(--orange);
 }
 
-.progress-panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: var(--shadow);
-  padding: 12px 14px;
-}
-
-.progress-panel h2 {
-  margin: 0 0 8px;
-  font-size: 14px;
-}
-
-.progress-panel ol {
-  display: grid;
-  gap: 5px;
-  margin: 0;
-  padding-inline-start: 20px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.progress-panel span {
-  color: #8a96a3;
-  direction: ltr;
-  display: block;
-  font-size: 12px;
-  margin-top: 2px;
-}
-
-.progress-panel li {
-  line-height: 1.45;
-}
-
 .dots {
   display: none;
   gap: 4px;

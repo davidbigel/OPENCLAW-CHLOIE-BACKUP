@@ -2,7 +2,8 @@ const state = {
   currentQuestionId: null,
   currentQuestion: null,
   currentSources: null,
-  events: null
+  pollTimer: null,
+  pollController: null
 };
 
 const el = {
@@ -13,7 +14,6 @@ const el = {
   raw: document.getElementById("sourceRaw"),
   statusBar: document.getElementById("statusBar"),
   statusText: document.getElementById("statusText"),
-  progress: document.getElementById("progressLog"),
   history: document.getElementById("historyList"),
   refreshHistory: document.getElementById("refreshHistory"),
   questionTitle: document.getElementById("questionTitle"),
@@ -73,6 +73,7 @@ el.form.addEventListener("submit", async function (event) {
   const sources = sourcesFromUi();
   state.currentQuestion = question;
   state.currentSources = sources;
+  stopWatching();
   setStatus("סנורקל עובד, לא לדאוג, תשובה בדרך...", true);
   clearAnswer(question, sources);
   try {
@@ -105,6 +106,7 @@ el.refreshHistory.addEventListener("click", function () {
 
 el.cancel.addEventListener("click", async function () {
   if (!state.currentQuestionId) return;
+  stopWatching();
   await api("/api/questions/" + state.currentQuestionId + "/cancel", {method: "POST", body: {}});
   setStatus("השאלה בוטלה.", false);
   await loadQuestion(state.currentQuestionId);
@@ -112,6 +114,7 @@ el.cancel.addEventListener("click", async function () {
 
 el.rerun.addEventListener("click", async function () {
   if (!state.currentQuestionId) return;
+  stopWatching();
   const result = await api("/api/questions/" + state.currentQuestionId + "/rerun", {
     method: "POST",
     body: {sources: sourcesFromUi()}
@@ -133,35 +136,42 @@ el.saveThread.addEventListener("click", async function () {
 });
 
 function watchQuestion(questionId) {
-  if (state.events) state.events.close();
-  state.events = new EventSource("/api/questions/" + questionId + "/events");
-  state.events.onmessage = function (event) {
-    const payload = JSON.parse(event.data);
-    renderQuestion(payload);
-    if (["done", "failed", "cancelled", "not_found"].includes(payload.status)) {
-      state.events.close();
-      state.events = null;
-      loadHistory();
-    }
-  };
-  state.events.onerror = function () {
-    if (state.events) state.events.close();
-    state.events = null;
-    pollQuestion(questionId);
-  };
+  stopWatching();
+  pollQuestion(questionId);
 }
 
 async function pollQuestion(questionId) {
-  const payload = await loadQuestion(questionId);
-  if (!["done", "failed", "cancelled", "not_found"].includes(payload.status)) {
-    window.setTimeout(function () { pollQuestion(questionId); }, 1500);
+  state.pollController = new AbortController();
+  try {
+    const payload = await loadQuestion(questionId, state.pollController.signal);
+    if (!["done", "failed", "cancelled", "not_found"].includes(payload.status)) {
+      state.pollTimer = window.setTimeout(function () { pollQuestion(questionId); }, 1800);
+    } else {
+      stopWatching();
+      await loadHistory();
+    }
+  } catch (error) {
+    if (error.name !== "AbortError") setStatus(error.message, false);
+  } finally {
+    state.pollController = null;
   }
 }
 
-async function loadQuestion(questionId) {
-  const payload = await api("/api/questions/" + questionId);
+async function loadQuestion(questionId, signal) {
+  const payload = await api("/api/questions/" + questionId, signal ? {signal: signal} : undefined);
   renderQuestion(payload);
   return payload;
+}
+
+function stopWatching() {
+  if (state.pollTimer) {
+    window.clearTimeout(state.pollTimer);
+    state.pollTimer = null;
+  }
+  if (state.pollController) {
+    state.pollController.abort();
+    state.pollController = null;
+  }
 }
 
 async function loadHistory() {
@@ -196,7 +206,6 @@ function clearAnswer(question, sources) {
   el.questionTitle.textContent = question;
   el.summary.textContent = "ממתין לתשובה...";
   el.footer.textContent = "Sources Used: running";
-  renderProgress([{level: "info", message: "Snoracle accepted the question", created_at: new Date().toISOString()}]);
   for (const source of ["wikillm", "obsidian", "raw"]) {
     const selected = sources && sources[source];
     document.getElementById(source + "Status").textContent = selected ? "queued" : "not_selected";
@@ -213,7 +222,7 @@ function renderQuestion(payload) {
   if (!payload || !payload.question_id) return;
   state.currentQuestionId = payload.question_id;
   el.questionTitle.textContent = payload.question || payload.question_id;
-  el.summary.innerHTML = renderMarkdown(payload.summary_answer_markdown || "ממתין לתשובה...");
+  el.summary.innerHTML = renderMarkdown(payload.summary_answer_markdown || payload.raw_response_text || "ממתין לתשובה...");
   el.footer.textContent = payload.sources_used_footer || "Sources Used: none";
   const running = ["queued", "running"].includes(payload.status);
   if (running) {
@@ -225,21 +234,7 @@ function renderQuestion(payload) {
   el.rerun.disabled = running;
   el.saveThread.disabled = running;
   el.saveThread.textContent = payload.thread_id ? "בטל שמירת ת'רד" : "שמור ת'רד";
-  renderProgress(payload.logs || []);
   renderBoxes(payload.boxes || {});
-}
-
-function renderProgress(logs) {
-  const items = logs || [];
-  if (!items.length) {
-    el.progress.innerHTML = '<li>אין אירועים עדיין.</li>';
-    return;
-  }
-  el.progress.innerHTML = items.map(function (item) {
-    return '<li><strong>' + escapeHtml(item.level || "info") + '</strong> '
-      + escapeHtml(item.message || "")
-      + '<span>' + escapeHtml(item.created_at || "") + '</span></li>';
-  }).join("");
 }
 
 function renderBoxes(boxes) {

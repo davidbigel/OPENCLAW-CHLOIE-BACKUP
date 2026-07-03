@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import json
+import subprocess
 import threading
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from .config import Config
 from .db import Store
-from .snoracle_adapter import synthesize_answer
-from .util import utc_now
-from .workers import WorkerResult, run_obsidian_worker, run_raw_worker, run_wikillm_worker
+from .snoracle_adapter import cancel_openclaw_lookup, kill_process_group, synthesize_answer
 
 
 class MissionControlService:
@@ -19,14 +15,18 @@ class MissionControlService:
         self.store = store
         self._busy_lock = threading.Lock()
         self._current_question_id: str | None = None
-        self._patch_thread = threading.Thread(target=self._patch_loop, name="wiki-patch-loop", daemon=True)
-        self._patch_thread.start()
+        self._process_lock = threading.Lock()
+        self._active_processes: dict[str, subprocess.Popen[str]] = {}
 
     def ask(self, question: str, sources: dict[str, bool]) -> dict[str, Any]:
         question = question.strip()
         if not question:
             return {"status": "error", "message": "question is required"}
-        selected = {name: bool(value) for name, value in (sources or {}).items()}
+        selected = {
+            "wikillm": bool((sources or {}).get("wikillm")),
+            "obsidian": bool((sources or {}).get("obsidian")),
+            "raw": bool((sources or {}).get("raw")),
+        }
         if not any(selected.values()):
             return {"status": "error", "message": "at least one source must be selected"}
         running = self.store.has_running_question()
@@ -57,7 +57,15 @@ class MissionControlService:
         ok = self.store.request_cancel(question_id)
         if not ok:
             return {"status": "not_found"}
-        return {"status": "cancelled", "question_id": question_id}
+        local_kill = self._kill_active_process(question_id)
+        row = self.store.get_question_row(question_id) or {}
+        cancel_result = self._attempt_openclaw_cancel(question_id, row)
+        return {
+            "status": "cancelled",
+            "question_id": question_id,
+            "local_kill": local_kill,
+            "openclaw_cancel": cancel_result,
+        }
 
     def toggle_thread(self, question_id: str) -> dict[str, Any]:
         result = self.store.toggle_thread_for_question(question_id)
@@ -84,220 +92,69 @@ class MissionControlService:
                 return
             if self.store.is_cancelled(question_id):
                 return
-            question = row["question"]
             selected = {
                 "wikillm": bool(row.get("selected_wikillm")),
                 "obsidian": bool(row.get("selected_obsidian")),
                 "raw": bool(row.get("selected_raw")),
             }
-            results = self._run_source_workers(question_id, question, selected)
-            if self.store.is_cancelled(question_id):
-                return
-            self.store.log(question_id, "info", "Snoracle synthesizing final answer", {"mode": self.config.snoracle_mode})
-            final_payload = synthesize_answer(self.config, question_id, question, results)
+            self.store.log(question_id, "info", "Snoracle OpenClaw turn requested", {"mode": self.config.snoracle_mode, "agent_id": self.config.snoracle_agent_id})
+            final_payload = synthesize_answer(
+                self.config,
+                self.store,
+                question_id,
+                row["question"],
+                selected,
+                register_process=self._register_process,
+                is_cancelled=lambda: self.store.is_cancelled(question_id),
+            )
             adapter_meta = final_payload.pop("_adapter_meta", {})
             if adapter_meta:
                 self.store.log(question_id, "info", "Snoracle adapter completed", adapter_meta)
             if self.store.is_cancelled(question_id):
-                self.store.log(question_id, "warning", "synthesis result ignored because question was cancelled", {})
+                self.store.log(question_id, "warning", "Snoracle result ignored because question was cancelled", {})
                 return
-            meaningful, reason = self._is_meaningful(final_payload)
-            self.store.log(
-                question_id,
-                "info",
-                "final answer evaluated",
-                {
-                    "meaningful": meaningful,
-                    "reason": reason,
-                    "wiki_update_candidates": len(final_payload.get("wiki_update_candidates", []) or []),
-                },
-            )
-            snapshot_path = None
-            if meaningful:
-                snapshot_path = self.store.create_answer_snapshot(question_id, self._snapshot_markdown(question, final_payload, reason), reason)
-            if self.store.is_cancelled(question_id):
-                self.store.log(question_id, "warning", "final write skipped because question was cancelled after snapshot", {})
-                return
-            for candidate in final_payload.get("wiki_update_candidates", []) or []:
-                self.store.create_wiki_update_candidate(question_id, "snoracle candidate", candidate)
-                self.store.create_wiki_patch_job(question_id, "snoracle candidate", candidate)
-            self.store.finish_question(question_id, final_payload, meaningful, snapshot_path)
+            candidate = bool(final_payload.get("candidate"))
+            self.store.log(question_id, "info", "final answer received", {"candidate": candidate, "status": final_payload.get("status")})
+            self.store.finish_question(question_id, final_payload, candidate, None)
         except Exception as exc:
             self.store.fail_question(question_id, str(exc))
         finally:
+            self._register_process(question_id, None)
             self._current_question_id = None
             self._busy_lock.release()
 
-    def _run_source_workers(self, question_id: str, question: str, selected: dict[str, bool]) -> list[WorkerResult]:
-        jobs = []
-        if selected.get("wikillm"):
-            jobs.append(("wikillm", run_wikillm_worker))
-        if selected.get("obsidian"):
-            jobs.append(("obsidian", run_obsidian_worker))
-        if selected.get("raw"):
-            jobs.append(("raw", run_raw_worker))
-        results: list[WorkerResult] = []
-        with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as executor:
-            future_map = {}
-            for source, worker in jobs:
-                run_id = self.store.create_source_run(question_id, source)
-                self.store.log(question_id, "info", f"{source} worker searching", {"source_run_id": run_id})
-                future = executor.submit(worker, self.config, question)
-                future_map[future] = (source, run_id)
-            for future in as_completed(future_map):
-                source, run_id = future_map[future]
-                if self.store.is_cancelled(question_id):
-                    self.store.finish_source_run(run_id, question_id, source, "cancelled", "cancelled")
-                    continue
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    result = WorkerResult(source=source, status="failed", answer_markdown=f"{source} worker failed", errors=[str(exc)])
-                self.store.log(
-                    question_id,
-                    "info" if result.status != "failed" else "error",
-                    f"{source} worker found {len(result.evidence)} evidence items",
-                    {"source_run_id": run_id, "status": result.status},
-                )
-                self.store.log(question_id, "info", f"{source} worker interpreting complete", {"source_run_id": run_id})
-                self.store.insert_evidence(question_id, run_id, result.evidence)
-                self.store.finish_source_run(
-                    run_id,
-                    question_id,
-                    source,
-                    result.status,
-                    result.answer_markdown,
-                    "; ".join(result.errors) if result.errors else None,
-                )
-                results.append(result)
-        self.store.log(
-            question_id,
-            "info",
-            "all selected source workers completed",
-            {
-                "selected_sources": [source for source, enabled in selected.items() if enabled],
-                "result_statuses": {item.source: item.status for item in results},
-                "evidence_total": sum(len(item.evidence) for item in results),
-            },
-        )
-        return results
+    def _register_process(self, question_id: str, process: subprocess.Popen[str] | None) -> None:
+        with self._process_lock:
+            if process is None:
+                self._active_processes.pop(question_id, None)
+            else:
+                self._active_processes[question_id] = process
 
-    def _is_meaningful(self, payload: dict[str, Any]) -> tuple[bool, str]:
-        evidence_count = 0
-        for box in (payload.get("boxes") or {}).values():
-            evidence_count += len(box.get("evidence") or [])
-        if payload.get("wiki_update_candidates"):
-            return True, "wiki update candidate"
-        if evidence_count >= 3:
-            return True, f"{evidence_count} evidence items"
-        return False, "low evidence volume"
+    def _kill_active_process(self, question_id: str) -> dict[str, Any]:
+        with self._process_lock:
+            process = self._active_processes.get(question_id)
+        if process is None:
+            result = {"status": "no_local_process"}
+            self.store.log(question_id, "warning", "cancel requested with no active local subprocess", result)
+            return result
+        result = kill_process_group(process)
+        self.store.log(question_id, "warning", "local OpenClaw subprocess cancellation attempted", result)
+        self._register_process(question_id, None)
+        return result
 
-    def _snapshot_markdown(self, question: str, payload: dict[str, Any], reason: str) -> str:
-        lines = [
-            "---",
-            "type: mission-control-answer",
-            f"question_id: {payload.get('question_id')}",
-            f"created_at: {utc_now()}",
-            f"reason: {reason}",
-            "---",
-            "",
-            f"# {question}",
-            "",
-            "## Summary",
-            "",
-            payload.get("summary_answer_markdown", ""),
-            "",
-            "## Source Boxes",
-            "",
+    def _attempt_openclaw_cancel(self, question_id: str, row: dict[str, Any]) -> dict[str, Any]:
+        lookups = [
+            row.get("openclaw_task_id"),
+            row.get("openclaw_run_id"),
+            row.get("openclaw_session_key"),
         ]
-        for source, box in (payload.get("boxes") or {}).items():
-            lines.extend(
-                [
-                    f"### {source}",
-                    "",
-                    f"Status: {box.get('status')}",
-                    "",
-                    box.get("answer_markdown") or "",
-                    "",
-                ]
-            )
-        lines.extend(["## Sources Used", "", payload.get("sources_used_footer", "")])
-        return "\n".join(lines).strip() + "\n"
-
-    def _patch_loop(self) -> None:
-        while True:
-            try:
-                job = self.store.claim_next_wiki_patch_job()
-                if not job:
-                    time.sleep(2)
-                    continue
-                question_id = job["question_id"]
-                changed_file = self._write_wiki_patch_candidate(job)
-                if changed_file:
-                    self.store.finish_wiki_patch_job(job["id"], question_id, "drafted", None, [changed_file])
-                else:
-                    self.store.finish_wiki_patch_job(job["id"], question_id, "skipped", "no actionable wiki patch payload", [])
-            except Exception as exc:
-                if 'job' in locals() and job:
-                    self.store.finish_wiki_patch_job(job["id"], job["question_id"], "failed", str(exc), [])
-                time.sleep(2)
-
-    def _write_wiki_patch_candidate(self, job: dict[str, Any]) -> str | None:
-        question_id = job["question_id"]
-        payload = {}
-        try:
-            payload = json.loads(job.get("payload_json") or "{}")
-        except json.JSONDecodeError:
-            payload = {"raw_payload": job.get("payload_json")}
-        if not _has_actionable_patch_payload(payload):
-            return None
-        question = self.store.get_question_row(question_id) or {}
-        target_dir = self.config.wikillm_dir / "questions"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / f"mission-control-update-{job['id']}.md"
-        markdown = [
-            "---",
-            "type: mission-control-wiki-update",
-            f"question_id: {question_id}",
-            f"patch_job_id: {job['id']}",
-            "status: drafted-auto",
-            f"created_at: {utc_now()}",
-            "---",
-            "",
-            f"# Mission Control Wiki Update {job['id']}",
-            "",
-            "## Trigger Question",
-            "",
-            str(question.get("question") or ""),
-            "",
-            "## Reason",
-            "",
-            str(job.get("reason") or ""),
-            "",
-            "## Candidate Payload",
-            "",
-            "```json",
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-            "```",
-            "",
-            "## Review Notes",
-            "",
-            "- Auto-created by Mission Control's serialized wiki patch queue.",
-            "- Review before promoting this into a concept, claim, playbook, or episode page.",
-        ]
-        target.write_text("\n".join(markdown).strip() + "\n", encoding="utf-8")
-        return str(target.relative_to(self.config.workspace_root))
-
-
-def _has_actionable_patch_payload(payload: Any) -> bool:
-    if payload is None:
-        return False
-    if isinstance(payload, str):
-        return bool(payload.strip())
-    if isinstance(payload, (int, float, bool)):
-        return True
-    if isinstance(payload, list):
-        return any(_has_actionable_patch_payload(item) for item in payload)
-    if isinstance(payload, dict):
-        return any(_has_actionable_patch_payload(value) for value in payload.values())
-    return False
+        for lookup in lookups:
+            if not lookup:
+                continue
+            result = cancel_openclaw_lookup(self.config, str(lookup))
+            self.store.log(question_id, "warning", "OpenClaw cancellation path attempted", {"lookup": lookup, "result": result})
+            if result.get("status") == "attempted" and result.get("exit_code") == 0:
+                return {"lookup": lookup, "result": result}
+        result = {"status": "unavailable", "reason": "no successful task/run/session-key cancellation path"}
+        self.store.log(question_id, "warning", "OpenClaw cancellation path unavailable", result)
+        return result

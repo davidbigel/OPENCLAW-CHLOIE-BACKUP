@@ -47,7 +47,9 @@ Add whatever helps you do your job. This is your cheat sheet.
 
 ### Mission Control JSON Answer Shape
 
-When Mission Control calls Snoracle through OpenClaw, return JSON only, with this top-level shape:
+When Mission Control calls Snoracle through OpenClaw, the API reminder is: "return Mission Control JSON only as described in TOOLS.md".
+
+Return JSON only, with this top-level shape:
 
 ```json
 {
@@ -90,4 +92,4 @@ For each Mission Control question:
 7. Put source-specific findings in their own boxes, then write the cross-source summary above them.
 8. Label outside knowledge explicitly if used.
 
-Future note: if Mission Control later uses persistent sessions, add explicit session management. For now, prefer fresh OpenClaw agent turns for clearer isolation.
+Mission Control should create and store a dedicated OpenClaw session per question so runs can be tracked, cancelled, inspected, and audited later.

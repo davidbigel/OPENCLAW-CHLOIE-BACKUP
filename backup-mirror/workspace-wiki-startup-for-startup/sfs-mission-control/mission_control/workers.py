@@ -84,7 +84,7 @@ def run_obsidian_worker(config: Config, question: str) -> WorkerResult:
     return WorkerResult(
         source="obsidian",
         status="unavailable",
-        answer_markdown="אין Obsidian עדיין.",
+        answer_markdown="",
         evidence=[],
         citations=[],
     )

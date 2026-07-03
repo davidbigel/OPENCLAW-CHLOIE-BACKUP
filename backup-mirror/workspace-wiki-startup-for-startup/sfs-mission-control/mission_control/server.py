@@ -6,7 +6,6 @@ import json
 import logging
 import mimetypes
 import ssl
-import time
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,6 +44,8 @@ def main() -> None:
         object.__setattr__(config, "public_port", args.public_port)
     if args.private_port:
         object.__setattr__(config, "private_port", args.private_port)
+    if not config.public_tls_cert or not config.public_tls_key:
+        raise RuntimeError("Mission Control public server is HTTPS-only; set MC_PUBLIC_TLS_CERT and MC_PUBLIC_TLS_KEY")
     configure_logging(config)
     store = Store(config)
     store.init()
@@ -61,12 +62,9 @@ def main() -> None:
         (config.public_host, config.public_port),
         partial(PublicHandler, config=config, service=service),
     )
-    if config.public_scheme == "https":
-        if not config.public_tls_cert or not config.public_tls_key:
-            raise RuntimeError("HTTPS requested without both TLS cert and key paths")
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(str(config.public_tls_cert), str(config.public_tls_key))
-        public_server.socket = context.wrap_socket(public_server.socket, server_side=True)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(str(config.public_tls_cert), str(config.public_tls_key))
+    public_server.socket = context.wrap_socket(public_server.socket, server_side=True)
 
     import threading
 
@@ -154,37 +152,32 @@ class PublicHandler(HandlerBase):
             return
 
         if parsed.path == "/health":
-            self.send_json(200, {"status": "ok", "public": True})
-            return
-
-        if parsed.path.startswith("/api/questions/") and parsed.path.endswith("/events"):
             if not self._authenticated():
-                self.send_json(401, {"status": "unauthorized"})
+                self._drop_request()
                 return
-            question_id = parsed.path.split("/")[3]
-            self._send_events(question_id)
+            self.send_json(200, {"status": "ok", "public": True, "scheme": "https"})
             return
 
         if parsed.path.startswith("/api/"):
             if not self._authenticated():
-                self.send_json(401, {"status": "unauthorized"})
+                self._drop_request()
                 return
             self._proxy_to_private("GET", parsed.path, None)
             return
 
         if not self._authenticated():
-            self._send_login()
+            self._drop_request()
             return
         self._serve_static(parsed.path)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if not parsed.path.startswith("/api/"):
-            self.send_json(404, {"status": "not_found"})
+            self._drop_request()
             return
         cookies = parse_cookies(self.headers.get("Cookie"))
         if not self._authenticated(cookies):
-            self.send_json(401, {"status": "unauthorized"})
+            self._drop_request()
             return
         if not origin_allowed(self.headers, self.config.allowed_origins):
             self.send_json(403, {"status": "forbidden", "message": "bad origin"})
@@ -203,23 +196,11 @@ class PublicHandler(HandlerBase):
         cookies = cookie_values or parse_cookies(self.headers.get("Cookie"))
         return verify_auth_token(cookies.get(AUTH_COOKIE), self.config.public_password, self.config.cookie_secret)
 
-    def _send_login(self) -> None:
-        self.send_text(
-            401,
-            """
-<!doctype html>
-<html lang="he" dir="rtl">
-<meta charset="utf-8">
-<title>Mission Control</title>
-<body style="font-family: system-ui; max-width: 720px; margin: 80px auto; line-height: 1.5;">
-<h1>Mission Control</h1>
-<p>כניסה דרך שער v1:</p>
-<p><a href="/?p=3d20">פתח עם ?p=3d20</a></p>
-</body>
-</html>
-""".strip(),
-            "text/html; charset=utf-8",
-        )
+    def _drop_request(self) -> None:
+        self.send_response(404)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _serve_static(self, path: str) -> None:
         if path == "/":
@@ -262,26 +243,6 @@ class PublicHandler(HandlerBase):
             self.send_json(502, {"status": "private_backend_error", "message": str(exc)})
         finally:
             conn.close()
-
-    def _send_events(self, question_id: str) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
-        last_payload = ""
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            payload = self.service.get_question(question_id) or {"status": "not_found"}
-            text = json.dumps(payload, ensure_ascii=False)
-            if text != last_payload:
-                self.wfile.write(f"data: {text}\n\n".encode("utf-8"))
-                self.wfile.flush()
-                last_payload = text
-            if payload.get("status") in {"done", "failed", "cancelled", "not_found"}:
-                break
-            time.sleep(1)
-
 
 class PrivateHandler(HandlerBase):
     def do_GET(self) -> None:

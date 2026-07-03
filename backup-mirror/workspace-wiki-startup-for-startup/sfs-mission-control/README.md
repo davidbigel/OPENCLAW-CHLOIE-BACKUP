@@ -19,18 +19,16 @@ The public gate remains a server-side v1 guardrail. Do not expose its literal va
 
 ## Snoracle Dispatch
 
-The app uses mission_control/snoracle_adapter.py as the only bridge to Snoracle.
+The app uses `mission_control/snoracle_adapter.py` as the only bridge to Snoracle.
 
 Modes:
 
-- MC_SNORACLE_MODE=openclaw - calls openclaw agent --session-id <id> --thinking xhigh --json. This is the default.
-- MC_SNORACLE_MODE=openclaw - calls openclaw agent through the current Snoracle agent route. By default it targets the current agent's persistent main session via --agent <id>.
-- MC_SNORACLE_MODE=local - deterministic local synthesis fallback, useful for development and tests.
-- MC_SNORACLE_AGENT_ID - explicit OpenClaw agent id override.
-- MC_SNORACLE_SESSION_ID - explicit OpenClaw session UUID override when you need to pin a concrete stored session.
-- MC_SNORACLE_SESSION_KEY - compatibility input. If set to agent:<id>:main it is parsed into MC_SNORACLE_AGENT_ID; raw session-like labels are not passed to the CLI.
+- `MC_SNORACLE_MODE=openclaw` - calls `openclaw agent --agent wiki-startup-for-startup --session-id <per-question-id> --thinking xhigh --timeout 300 --json`. This is the default.
+- `MC_SNORACLE_MODE=local` - deterministic local response, useful for development and tests only.
+- `MC_SNORACLE_AGENT_ID` - explicit OpenClaw agent id override. Production should keep `wiki-startup-for-startup`.
+- `MC_SNORACLE_TIMEOUT_SECONDS` - per-turn OpenClaw timeout; default `300`.
 
-Default: openclaw, with local fallback if dispatch fails.
+Default: OpenClaw, with raw stdout/stderr stored even when JSON parsing fails.
 
 ## Data
 
@@ -38,4 +36,5 @@ Runtime data is stored under:
 
 - SQLite: kb/mission-control/mission-control.sqlite3
 - Logs: kb/mission-control/logs/
-- Meaningful answer snapshots: kb/mission-control/answers/
+- OpenClaw run output: kb/mission-control/runs/<question_id>/
+- Candidate/digested flags: stored on each question row; no automatic wiki patch job runs in this phase.

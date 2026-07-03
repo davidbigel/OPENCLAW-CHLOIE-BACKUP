@@ -19,8 +19,10 @@ class Store:
         self.config.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.config.log_dir.mkdir(parents=True, exist_ok=True)
         self.config.answers_dir.mkdir(parents=True, exist_ok=True)
+        self.config.runs_dir.mkdir(parents=True, exist_ok=True)
         with self._connect() as con:
             con.executescript(SCHEMA)
+            self._ensure_question_columns(con)
             con.execute("PRAGMA journal_mode=WAL")
             con.execute(
                 "INSERT OR IGNORE INTO settings(key, value, created_at, updated_at) VALUES (?, ?, ?, ?)",
@@ -104,7 +106,8 @@ class Store:
             rows = con.execute(
                 """
                 SELECT id, thread_id, question, status, selected_wikillm, selected_obsidian,
-                       selected_raw, created_at, started_at, finished_at, cancelled_at, error
+                       selected_raw, candidate, digested, parse_status, created_at,
+                       started_at, finished_at, cancelled_at, error
                 FROM questions
                 ORDER BY created_at DESC
                 LIMIT ?
@@ -198,7 +201,25 @@ class Store:
             "sources_used_footer": q.get("sources_used_footer") or "",
             "labels": _safe_load_json(q.get("labels_json")) or [],
             "meaningful": bool(q.get("meaningful")),
+            "candidate": bool(q.get("candidate")),
+            "digested": bool(q.get("digested")),
             "snapshot_path": q.get("snapshot_path"),
+            "parse_status": q.get("parse_status"),
+            "raw_response_text": q.get("raw_response_text") or "",
+            "raw_response_path": q.get("raw_response_path"),
+            "openclaw": {
+                "agent_id": q.get("openclaw_agent_id"),
+                "session_id": q.get("openclaw_session_id"),
+                "session_key": q.get("openclaw_session_key"),
+                "run_id": q.get("openclaw_run_id"),
+                "task_id": q.get("openclaw_task_id"),
+                "cli_pid": q.get("cli_pid"),
+                "cli_started_at": q.get("cli_started_at"),
+                "cli_finished_at": q.get("cli_finished_at"),
+                "cli_exit_code": q.get("cli_exit_code"),
+                "stdout_path": q.get("cli_stdout_path"),
+                "stderr_path": q.get("cli_stderr_path"),
+            },
             "error": q.get("error"),
             "logs": [_log_row_to_dict(row) for row in logs],
         }
@@ -261,19 +282,100 @@ class Store:
             self._log(con, question_id, "info", "question started", {})
         return True
 
+    def prepare_agent_run(
+        self,
+        question_id: str,
+        *,
+        agent_id: str,
+        session_id: str,
+        session_key: str,
+        stdout_path: str,
+        stderr_path: str,
+        raw_response_path: str,
+    ) -> None:
+        with self._lock, self._connect() as con:
+            con.execute(
+                """
+                UPDATE questions
+                SET openclaw_agent_id = ?, openclaw_session_id = ?, openclaw_session_key = ?,
+                    cli_stdout_path = ?, cli_stderr_path = ?, raw_response_path = ?,
+                    parse_status = ?
+                WHERE id = ?
+                """,
+                (
+                    agent_id,
+                    session_id,
+                    session_key,
+                    stdout_path,
+                    stderr_path,
+                    raw_response_path,
+                    "pending",
+                    question_id,
+                ),
+            )
+            self._log(
+                con,
+                question_id,
+                "info",
+                "OpenClaw run prepared",
+                {"agent_id": agent_id, "session_id": session_id, "session_key": session_key},
+            )
+
+    def mark_agent_process_started(self, question_id: str, pid: int, command: list[str]) -> None:
+        safe_command = ["<message>" if item.startswith("Mission Control request") else item for item in command]
+        with self._lock, self._connect() as con:
+            con.execute(
+                "UPDATE questions SET cli_pid = ?, cli_started_at = ? WHERE id = ?",
+                (pid, utc_now(), question_id),
+            )
+            self._log(con, question_id, "info", "OpenClaw subprocess started", {"pid": pid, "command": safe_command})
+
+    def finish_agent_run(
+        self,
+        question_id: str,
+        *,
+        exit_code: int | None,
+        parse_status: str,
+        raw_response_text: str,
+        run_id: str | None = None,
+        task_id: str | None = None,
+    ) -> None:
+        with self._lock, self._connect() as con:
+            con.execute(
+                """
+                UPDATE questions
+                SET cli_finished_at = ?, cli_exit_code = ?, parse_status = ?,
+                    raw_response_text = ?, openclaw_run_id = COALESCE(?, openclaw_run_id),
+                    openclaw_task_id = COALESCE(?, openclaw_task_id)
+                WHERE id = ?
+                """,
+                (utc_now(), exit_code, parse_status, raw_response_text, run_id, task_id, question_id),
+            )
+            self._log(
+                con,
+                question_id,
+                "info" if exit_code == 0 else "warning",
+                "OpenClaw subprocess finished",
+                {"exit_code": exit_code, "parse_status": parse_status, "raw_chars": len(raw_response_text or "")},
+            )
+
     def finish_question(self, question_id: str, final_payload: dict[str, Any], meaningful: bool, snapshot_path: str | None = None) -> bool:
         now = utc_now()
+        final_status = str(final_payload.get("status") or "done")
+        if final_status not in {"done", "failed"}:
+            final_status = "done"
+        candidate = bool(final_payload.get("candidate"))
         with self._lock, self._connect() as con:
             cur = con.execute(
                 """
                 UPDATE questions
                 SET status = ?, finished_at = ?, summary_answer_markdown = ?, final_json = ?,
                     sources_used_footer = ?, disagreements_json = ?, wiki_update_candidates_json = ?,
-                    labels_json = ?, meaningful = ?, snapshot_path = ?
+                    labels_json = ?, meaningful = ?, candidate = ?, snapshot_path = ?, error = ?
                 WHERE id = ? AND status != 'cancelled'
                 """,
                 (
-                    "done",
+                    final_status,
                     now,
                     final_payload.get("summary_answer_markdown", ""),
                     json_dumps(final_payload),
@@ -282,7 +384,9 @@ class Store:
                     json_dumps(final_payload.get("wiki_update_candidates", [])),
                     json_dumps(final_payload.get("labels", [])),
                     int(meaningful),
+                    int(candidate),
                     snapshot_path,
+                    final_payload.get("error"),
                     question_id,
                 ),
             )
@@ -384,6 +488,12 @@ class Store:
             (question_id, level, message, json_dumps(data), utc_now()),
         )
 
+    def _ensure_question_columns(self, con: sqlite3.Connection) -> None:
+        existing = {row["name"] for row in con.execute("PRAGMA table_info(questions)").fetchall()}
+        for name, ddl in QUESTION_EXTRA_COLUMNS:
+            if name not in existing:
+                con.execute(f"ALTER TABLE questions ADD COLUMN {name} {ddl}")
+
     def create_answer_snapshot(self, question_id: str, markdown: str, reason: str) -> str:
         self.config.answers_dir.mkdir(parents=True, exist_ok=True)
         path = self.config.answers_dir / f"{question_id}.md"
@@ -395,73 +505,6 @@ class Store:
             )
             self._log(con, question_id, "info", "answer snapshot exported", {"path": str(path), "reason": reason})
         return str(path)
-
-    def create_wiki_update_candidate(self, question_id: str, reason: str, payload: dict[str, Any]) -> int:
-        with self._lock, self._connect() as con:
-            cur = con.execute(
-                """
-                INSERT INTO wiki_update_candidates(question_id, reason, payload_json, status, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (question_id, reason, json_dumps(payload), "candidate", utc_now()),
-            )
-            candidate_id = int(cur.lastrowid)
-            self._log(
-                con,
-                question_id,
-                "info",
-                "wiki update candidate stored",
-                {"candidate_id": candidate_id, "reason": reason},
-            )
-        return candidate_id
-
-    def create_wiki_patch_job(self, question_id: str, reason: str, payload: dict[str, Any]) -> int:
-        with self._lock, self._connect() as con:
-            cur = con.execute(
-                """
-                INSERT INTO wiki_patch_jobs(question_id, status, reason, payload_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (question_id, "waiting", reason, json_dumps(payload), utc_now()),
-            )
-            job_id = int(cur.lastrowid)
-            self._log(con, question_id, "warning", "wiki patch job queued", {"job_id": job_id, "reason": reason})
-        return job_id
-
-    def claim_next_wiki_patch_job(self) -> dict[str, Any] | None:
-        with self._lock, self._connect() as con:
-            running = con.execute("SELECT id FROM wiki_patch_jobs WHERE status = 'running' LIMIT 1").fetchone()
-            if running:
-                return None
-            row = con.execute(
-                "SELECT * FROM wiki_patch_jobs WHERE status = 'waiting' ORDER BY id LIMIT 1"
-            ).fetchone()
-            if not row:
-                return None
-            con.execute(
-                "UPDATE wiki_patch_jobs SET status = ?, started_at = ? WHERE id = ?",
-                ("running", utc_now(), row["id"]),
-            )
-            self._log(con, row["question_id"], "info", "wiki patch job started", {"job_id": row["id"]})
-        return dict(row)
-
-    def finish_wiki_patch_job(self, job_id: int, question_id: str, status: str, error: str | None = None, changed_files: list[str] | None = None) -> None:
-        with self._lock, self._connect() as con:
-            con.execute(
-                "UPDATE wiki_patch_jobs SET status = ?, finished_at = ?, error = ?, changed_files_json = ? WHERE id = ?",
-                (status, utc_now(), error, json_dumps(changed_files or []), job_id),
-            )
-            level = "error" if status == "failed" else "info"
-            self._log(con, question_id, level, f"wiki patch job {status}", {"job_id": job_id, "error": error, "changed_files": changed_files or []})
-
-    def defer_wiki_patch_job(self, job_id: int, question_id: str, reason: str) -> None:
-        with self._lock, self._connect() as con:
-            con.execute(
-                "UPDATE wiki_patch_jobs SET status = ?, error = ? WHERE id = ?",
-                ("waiting_manual_patch", reason, job_id),
-            )
-            self._log(con, question_id, "warning", "wiki patch job waiting for manual/OpenClaw patch worker", {"job_id": job_id, "reason": reason})
-
 
 def _empty_box(selected: bool) -> dict[str, Any]:
     return {
@@ -516,7 +559,23 @@ CREATE TABLE IF NOT EXISTS questions (
     wiki_update_candidates_json TEXT,
     labels_json TEXT,
     meaningful INTEGER NOT NULL DEFAULT 0,
+    candidate INTEGER NOT NULL DEFAULT 0,
+    digested INTEGER NOT NULL DEFAULT 0,
     snapshot_path TEXT,
+    openclaw_agent_id TEXT,
+    openclaw_session_id TEXT,
+    openclaw_session_key TEXT,
+    openclaw_run_id TEXT,
+    openclaw_task_id TEXT,
+    cli_pid INTEGER,
+    cli_started_at TEXT,
+    cli_finished_at TEXT,
+    cli_exit_code INTEGER,
+    cli_stdout_path TEXT,
+    cli_stderr_path TEXT,
+    raw_response_path TEXT,
+    raw_response_text TEXT,
+    parse_status TEXT,
     created_at TEXT NOT NULL,
     started_at TEXT,
     finished_at TEXT,
@@ -612,3 +671,23 @@ CREATE TABLE IF NOT EXISTS saved_threads (
     updated_at TEXT NOT NULL
 );
 """
+
+
+QUESTION_EXTRA_COLUMNS = (
+    ("candidate", "INTEGER NOT NULL DEFAULT 0"),
+    ("digested", "INTEGER NOT NULL DEFAULT 0"),
+    ("openclaw_agent_id", "TEXT"),
+    ("openclaw_session_id", "TEXT"),
+    ("openclaw_session_key", "TEXT"),
+    ("openclaw_run_id", "TEXT"),
+    ("openclaw_task_id", "TEXT"),
+    ("cli_pid", "INTEGER"),
+    ("cli_started_at", "TEXT"),
+    ("cli_finished_at", "TEXT"),
+    ("cli_exit_code", "INTEGER"),
+    ("cli_stdout_path", "TEXT"),
+    ("cli_stderr_path", "TEXT"),
+    ("raw_response_path", "TEXT"),
+    ("raw_response_text", "TEXT"),
+    ("parse_status", "TEXT"),
+)

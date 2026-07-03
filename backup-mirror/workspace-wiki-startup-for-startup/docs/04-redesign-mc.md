@@ -1,209 +1,301 @@
 # Mission Control Redesign Plan
 
-This is the corrected plan after David reviewed the first redesign draft.
+This is the active implementation plan after David's grill answers.
 
-The old audit-style list was too broad. The active plan is now narrower: Mission Control should stop doing local source-worker synthesis and instead ask the real Snoracle agent, through OpenClaw, to run a full agent turn with the workspace system prompts, TOOLS.md guidance, and source-specific subagents/tools.
+The core correction is simple: Mission Control is an API shell around the real Snoracle agent. The backend should persist the question, call OpenClaw for a full Snoracle agent turn, capture whatever comes back, store it, and show it in the web UI. Snoracle and its subagents own source-query reasoning.
 
 ## Decision Summary
 
-- Use OpenClaw/Snoracle as the intelligence layer, not keyword-only backend retrieval.
-- The backend API should persist the question, call OpenClaw CLI/API, capture the full answer, store it, and dump it to the frontend for human review.
-- Latency is acceptable for now if it buys better reasoning and uses Snoracle's full prompt/memory/tool context.
-- Fresh one-shot agent turns are the current target. Persistent Mission Control sessions are a future option and should be documented in code/spec comments only.
-- Port 40006 is HTTPS-only. HTTP should not serve the app.
-- The public gate remains a server-side guardrail, but the literal gate URL must not appear in HTML or browser JS.
-- Self-signed TLS is correct for this stage.
-- The wiki-patch workflow is out of scope for now. Store candidate/digested flags in SQLite and do no automatic patch action.
-- UI progress can be simple for now: show loader when a query starts, remove loader when the CLI/API result returns.
+- Architecture: API -> OpenClaw CLI full Snoracle turn -> API -> frontend.
+- Target agent: always the current `wiki-startup-for-startup` Snoracle agent. Do not create a separate Mission Control agent.
+- Session model: create and store a dedicated OpenClaw session per Mission Control question so the app can track, cancel, inspect, and later resume/audit runs.
+- Prompt model: the API passes a short action prompt plus the inline reminder: "return Mission Control JSON only as described in TOOLS.md".
+- Output handling: the API returns whatever the agent returns. It may parse JSON opportunistically for storage/UI fields, but non-JSON output is not a request failure during this phase.
+- Timeout: start with 5 minutes per OpenClaw agent turn.
+- Source reasoning: no keyword-only backend retrieval as the product path. Snoracle/subagents reason about the question and create source-specific queries.
+- Candidate workflow: store `candidate` and `digested` bit columns. No automatic wiki patch workflow now.
+- Gate: `40006` checks the server-side gate. If the request is not gated or already authenticated from a gate exchange, drop/ignore it. Do not expose the gate value in HTML or browser JS.
+- Transport: `40006` is HTTPS-only with the current self-signed certificate approach.
+- Progress UI: loader on when query starts; loader off when response/error returns.
 
-## Plan 01 - Replace Backend Synthesis With A Full OpenClaw Agent Turn
+## Implementation Status - 2026-07-01
+
+- Implemented the full OpenClaw/Snoracle turn bridge in `sfs-mission-control/mission_control/snoracle_adapter.py`.
+- Verified the command path with a real CLI probe: `openclaw agent --agent wiki-startup-for-startup --session-id <id> --message ... --timeout 15 --json` completed and returned a top-level `runId`.
+- Stored explicit-session keys in OpenClaw's observed format: `agent:wiki-startup-for-startup:explicit:<session-id>`.
+- Added question-row metadata for OpenClaw session/run ids, subprocess pid/timing, stdout/stderr/raw output paths, raw response text, parse status, `candidate`, and `digested`.
+- Removed the local keyword worker path from the primary answer flow. The old workers remain only as development utilities/tests.
+- Disabled automatic wiki patch creation. This phase stores only `candidate` and `digested`.
+- Enforced HTTPS-only startup and hidden server-side gate behavior.
+- Simplified the frontend to loader/polling plus raw/parsed answer display.
+- Implemented layered cancellation: browser polling abort, backend status cancellation, local subprocess group kill, then best-effort `openclaw tasks cancel <lookup>` using task id, run id, or explicit session key.
+
+## Plan 01 - Full OpenClaw/Snoracle Turn
 
 Simple explanation:
-Mission Control should not synthesize with local keyword workers. It should ask Snoracle to handle the question as an OpenClaw agent turn, because Snoracle has the tuned workspace files, system prompt, and session/tool behavior that the API layer lacks.
+Mission Control should call Snoracle as a real OpenClaw agent turn. The backend should not attempt to replace Snoracle with local synthesis or keyword workers.
 
 Source reason:
-The current adapter builds a local fallback and then tries to call OpenClaw from mission_control/snoracle_adapter.py. The CLI help confirms the available command shape: openclaw agent supports --agent, --session-id, --message, --thinking, --timeout, and --json. David's input is that an OpenClaw agent call returns a full answer and should be the primary path.
+David wants the OpenClaw agent path because Snoracle has the tuned workspace files, system prompt, TOOLS.md guidance, and tool/subagent access. The OpenClaw docs confirm `openclaw agent` is the CLI path for a full agent turn and supports `--agent`, `--session-id`, `--message`, `--thinking`, `--timeout`, and `--json`.
 
 Fix suggest:
 Rewrite the adapter into an api-cli-api bridge:
 
-1. Public API receives the question and selected source boxes.
-2. API creates a SQLite question row immediately.
-3. API writes a compact action prompt for Snoracle that includes question id, selected source types, and the Mission Control JSON answer contract.
-4. API calls openclaw agent with --agent <snoracle-agent-id>, --message <prompt>, --thinking xhigh, --timeout <seconds>, and --json.
-5. Snoracle performs the actual work: reason about the user question, create meaningful source-specific queries, use subagents/tools for selected data sources, wait for their outputs, and return one structured JSON answer.
-6. API captures stdout/stderr, parses or stores the full response, writes SQLite, and returns/dumps the response to the frontend.
+1. Public API receives question and selected source boxes.
+2. API creates a SQLite question row.
+3. API generates a Mission Control OpenClaw session id/key for that question and stores it.
+4. API builds a short prompt containing question id, source selections, user question, and the reminder: "return Mission Control JSON only as described in TOOLS.md".
+5. API calls the current Snoracle agent through OpenClaw with a 300 second timeout.
+6. Snoracle reasons about the question, uses subagents/tools for selected source types, and returns the answer.
+7. API stores stdout, stderr, exit code, timings, session metadata, and parsed JSON if parsing succeeds.
+8. API returns the raw/full agent output to the frontend for review.
+
+Initial command shape to verify in implementation:
+
+```bash
+openclaw agent \
+  --agent wiki-startup-for-startup \
+  --session-id <mission-control-session-id> \
+  --message "<action prompt>" \
+  --thinking xhigh \
+  --timeout 300 \
+  --json
+```
+
+If the CLI rejects combining `--agent` and `--session-id`, use the Gateway/session API path documented in OpenClaw protocol: create/resolve a session for `wiki-startup-for-startup`, then send to that session. Do not silently fall back to the visible human chat route.
 
 Why this solves it:
-The model doing the knowledge work is the actual Snoracle agent, not a thin local search harness. This preserves the tuned agent behavior and also avoids the self-route/local-fallback problem from the previous implementation.
+The intelligence layer becomes the actual Snoracle agent while the API remains a reliable persistence and delivery layer.
 
-Implementation notes:
-- Do not use the currently visible human chat route for app output.
-- For now, prefer a fresh one-shot OpenClaw agent turn. Add a code/spec comment that persistent Mission Control sessions may be added later with explicit session management.
-- Future speed option: add a direct provider/model API path where the user can select model, effort level, and reasoning level. This is not the v1 path.
-
-## Plan 02 - Put The Mission Control Answer Contract In TOOLS.md
+## Plan 02 - Store OpenClaw Session/Run Metadata
 
 Simple explanation:
-Snoracle needs a stable instruction for how to answer Mission Control calls. That belongs in TOOLS.md so the full agent turn can read it as local operating context.
+Each Mission Control question needs its own tracked OpenClaw execution identity.
 
 Source reason:
-David asked for the JSON structured response schema to live in TOOLS.md for testing. The current adapter embeds a small instruction string in code, which is too hidden and too thin for a full agent workflow.
+David answered that Mission Control should create and store sessions because it lets us control sessions now and is useful later. OpenClaw docs say a session key points to a current session id, and `--session-id` reuses an explicit session.
 
 Fix suggest:
-Add a Mission Control section to TOOLS.md with the required JSON answer shape, source-box behavior, source-specific query responsibility, citation/label expectations, and candidate/digested decision guidance.
+Add fields to the question table or a related `agent_runs` table:
+
+- `openclaw_agent_id`
+- `openclaw_session_id`
+- `openclaw_session_key`
+- `openclaw_run_id`
+- `openclaw_task_id`
+- `cli_pid`
+- `cli_started_at`
+- `cli_finished_at`
+- `cli_exit_code`
+- `cli_stdout_path`
+- `cli_stderr_path`
+- `raw_response_path`
+
+Use deterministic ids where possible, for example session ids derived from the question id plus a random suffix. Store raw command output under `kb/mission-control/runs/<question_id>/`.
 
 Why this solves it:
-The API prompt can stay smaller and cleaner, while Snoracle still sees the answer contract through normal OpenClaw workspace context.
+Cancellation, debugging, audit, and future session reuse become concrete instead of relying on an anonymous subprocess.
 
-## Plan 03 - Make Source Reasoning An Agent Responsibility
+## Plan 03 - Mission Control Contract In TOOLS.md
 
 Simple explanation:
-Source retrieval should not be hardcoded keyword matching. The agent's job is to understand the question, decide what it needs from WikiLLM, Obsidian, and raw transcripts, and form meaningful source-specific searches or subagent tasks.
+The JSON answer shape and source-query responsibilities belong in TOOLS.md so Snoracle sees them as part of its local operating context.
 
 Source reason:
-The existing worker code tokenizes the question and matches text mechanically. David explicitly rejected that as the core strategy, because the point of using GPT plus OpenClaw is that the agent can reason before querying.
+David explicitly asked to put the structured response schema in TOOLS.md for testing and to pass only a short reminder in the API prompt.
 
 Fix suggest:
-Remove the local workers from the primary answer path. In the Snoracle prompt/TOOLS contract, require the agent to restate the research task, decide what each selected source should prove or disprove, generate source-specific queries, use selected-source subagents/tools, and preserve the three source boxes in the final JSON.
+Keep the Mission Control JSON schema and source-query instructions in TOOLS.md. The API prompt should not repeat the full schema; it should say: "return Mission Control JSON only as described in TOOLS.md".
 
 Why this solves it:
-The source work becomes adaptive and question-aware. This is exactly the layer where an AI agent should add value.
+The prompt stays short while Snoracle still has the full contract in workspace context.
 
-## Plan 04 - Keep CLI Payloads Small And Observable
+## Plan 04 - Source Querying Is Snoracle's Job
 
 Simple explanation:
-The API should not pass huge evidence blobs as a CLI argument. It should pass an action prompt and let Snoracle/subagents retrieve source material.
+Mission Control should not hardcode naive retrieval as its core product behavior. Snoracle should understand the question and decide how to query WikiLLM, Obsidian, and raw transcripts.
 
 Source reason:
-Current code proof: _build_openclaw_command() appends the full prompt as --message, while _build_prompt() contains compaction logic and a 180,000 byte soft limit. The answer, evidence, and citation sample limits are local code constants, not configurable settings in config.py. That proves the current design can produce oversized prompts and already works around it by truncating evidence.
+David rejected keyword-only retrieval because the whole point of GPT plus OpenClaw is to let the AI agent/subagents reason about the question before querying sources.
 
 Fix suggest:
-Use the CLI message only for the action request, source selections, question id, and output contract reminder. If the backend ever needs to provide larger context, write it to kb/mission-control/evidence-packs/ and pass a file path or question id, not the full blob.
+Move source work into Snoracle instructions:
+
+1. Understand the question as a research task.
+2. Decide what each selected source needs to prove, disprove, or clarify.
+3. Create source-specific queries, including Hebrew/English variants when useful.
+4. Use subagents/tools for selected data-source types.
+5. Wait for source results.
+6. Preserve the three source boxes in the final answer.
+
+Backend local workers may remain temporarily as fallback/dev utilities, but they are not the primary answer path.
 
 Why this solves it:
-The command stays stable and avoids OS argument limits. Snoracle can still retrieve or inspect full source material using tools.
+The source retrieval layer becomes adaptive and research-aware instead of token matching.
 
-## Plan 05 - Do Not Let The API Get Stuck
+## Plan 05 - Raw Output Is Always Returned
 
 Simple explanation:
-The browser should not hang forever while OpenClaw is running.
+For this phase, the app should not fail just because Snoracle returns extra text or imperfect JSON.
 
 Source reason:
-The current subprocess call uses capture_output with a long timeout. David also asked for pre/post CLI logging and for the API to dump the response to the frontend so the human handler can review it.
+David answered that no matter what the agent returns, the API should return it so he can read and decide himself.
 
 Fix suggest:
-Wrap the OpenClaw call in a job runner: log before CLI call, start subprocess with timeout, capture stdout and stderr to per-question log files, store parsed JSON if possible and raw output always, store failure state on timeout/error, and return the stored answer/status to the frontend.
+Store and return raw output always. If JSON parsing succeeds, use it to populate structured UI fields. If parsing fails, show raw output in the answer area and mark the structured parse status as failed internally.
 
 Why this solves it:
-The API always has a bounded lifecycle for each request and a readable audit trail when OpenClaw is slow or fails.
+Testing can continue even when the agent contract is imperfect. Bad output becomes visible product feedback, not a backend blocker.
 
-## Plan 06 - Hard Stop Flow Is Required But Still TBD
+## Plan 06 - Five Minute Timeout And No Stuck API
 
 Simple explanation:
-Cancellation must eventually stop the active OpenClaw call or session, not only mark the UI cancelled.
+The API must have a hard bound around OpenClaw calls.
 
 Source reason:
-openclaw agent --help does not show a cancel flag. openclaw tasks has a cancel command for tracked background tasks, but it is not yet proven that a foreground openclaw agent subprocess creates a cancellable task id. This needs a specific OpenClaw docs/runtime check.
+David chose 5 minutes after observing that the first test question was fast. Current code used much longer timeouts.
 
 Fix suggest:
-For the immediate implementation, track the local subprocess and kill its process group on cancel. Also store any OpenClaw session id or task id if the CLI JSON output exposes one. Research whether OpenClaw agent turns can be cancelled through tasks, sessions, or Gateway APIs, then document the chosen hard-stop path.
+Set the OpenClaw CLI timeout to 300 seconds. Around the CLI call, write pre/post logs:
+
+- before: question id, session id, selected sources, command shape without secrets, timestamp
+- after success: duration, exit code, stdout path, stderr path, parsed JSON status
+- after failure/timeout: duration, error class, stdout/stderr paths, cancellation state
 
 Why this solves it:
-Local cancellation becomes real immediately, while the OpenClaw-specific stop mechanism is not guessed.
+The web request lifecycle is bounded and every run has a trace.
 
-Status:
-TBD after OpenClaw cancellation research.
-
-## Plan 07 - HTTPS-Only Public App
+## Plan 07 - Cancel Must Kill The Agent Session/Run
 
 Simple explanation:
-Port 40006 should serve HTTPS only. HTTP should not return the application.
+Cancellation is not just a UI state. It must cancel frontend waiting, backend subprocess work, and the active OpenClaw agent session/run as far as OpenClaw supports it.
 
 Source reason:
-The current config can fall back to HTTP when TLS files are missing, and allowed origins currently include both HTTP and HTTPS. docs/03-mc.md also still contains old HTTP wording.
+David clarified that cancel should kill the agent session and cancel the API request on frontend and backend. OpenClaw docs show several relevant mechanisms but the exact foreground-agent cancellation path still needs implementation verification:
+- Agent loop docs mention AbortSignal/cancel and timeout as early end paths.
+- Gateway protocol exposes `tasks.cancel`.
+- `openclaw tasks cancel <lookup>` accepts a task id, run id, or session key for background tasks.
+- FAQ stop triggers exist as standalone messages, but that is not a proven API-level foreground cancellation path.
 
 Fix suggest:
-Require TLS files at startup for public port 40006. If TLS is missing, fail startup instead of serving HTTP. Only allow HTTPS origins for 40006. Keep the self-signed certificate for this stage.
+Implement cancellation in layers:
+
+1. Frontend aborts the active fetch/poll and marks the UI cancelled.
+2. Backend marks the question cancelling/cancelled.
+3. Backend kills the local OpenClaw subprocess process group.
+4. Backend uses stored `openclaw_task_id`, `openclaw_run_id`, or `openclaw_session_key` to call the strongest available OpenClaw cancellation path, starting with `openclaw tasks cancel <lookup>` when a task/run record exists.
+5. If no cancellable task is discoverable, record that OpenClaw-level cancellation was unavailable and keep the local subprocess kill as the hard stop for the API request.
+
+Acceptance note:
+A UI-only cancel is not acceptable. The implementation must prove, in logs, what was killed locally and what OpenClaw cancellation path was attempted.
 
 Why this solves it:
-The deployed app has one security posture and one public URL. There is no accidental HTTP mode.
+The API and browser stop immediately, and the app has a concrete audit trail for whether the underlying OpenClaw run also stopped.
 
-## Plan 08 - Hide The Gate From HTML And Browser JS
+## Plan 08 - HTTPS-Only Public App
 
 Simple explanation:
-The static gate can remain as a server-side guardrail, but the UI must not advertise it.
+Port 40006 should serve HTTPS only.
 
 Source reason:
-The current login HTML renders a visible link containing the gate parameter. David explicitly rejected exposing that literal in HTML/JS.
+David said HTTPS only always for 40006 and self-signed certificate is the correct solution for this stage.
 
 Fix suggest:
-Remove the visible gate link from the login page and do not put the literal gate value in static files. The server can still accept the gate parameter, exchange it for cookies, and redirect to the root page.
+Require TLS certificate/key at startup for 40006. If missing, fail startup. Remove HTTP origins from allowed origins. Do not serve the app over HTTP.
 
 Why this solves it:
-The guardrail remains functional without training every visitor or scraped HTML copy on the entry URL.
+There is one deployment mode and no accidental plaintext app.
 
-## Plan 09 - Candidate And Digested Flags Replace Wiki Patch Workflow
+## Plan 09 - Gate Handling
 
 Simple explanation:
-Mission Control should not auto-patch the wiki now. It should only mark useful Q&A as candidates for later digestion.
+The server should enforce the v1 gate itself and should not advertise the gate in the UI.
 
 Source reason:
-The current implementation has wiki update candidate and wiki patch job machinery. David wants no workflow yet: just candidate and digested bit columns in SQLite.
+David clarified that `server.py` for 40006 should check whether the gate exists; if not, ignore/drop the request. He also said the gate value should not appear anywhere in HTML/JS.
 
 Fix suggest:
-Add candidate and digested bit columns to the question/Q&A table. Snoracle decides whether an answer is meaningful. If meaningful, the returned JSON or DB write marks candidate = 1. digested starts at 0 and is flipped later by a future digestion workflow. Disable or bypass current automatic wiki patch job creation.
+Keep the gate check server-side:
+
+- No visible login link.
+- No gate value in static HTML/JS.
+- Requests without valid gate entry or previously established gate auth get a minimal no-content/404 style response.
+- If keeping the current cookie exchange, the exchange must be internal and invisible: valid gate -> cookie -> redirect/root; no gate and no cookie -> drop/ignore.
 
 Why this solves it:
-The system preserves important answers for later knowledge-base work without pretending to have a safe patch workflow.
+The app remains gated without publishing the gate value to browser code or unauthenticated visitors.
 
-Code/spec comment to add later:
-Future workflow may review candidate Q&A rows, create proposed wiki diffs, and mark digested = 1 after human or validated automated digestion.
-
-## Plan 10 - Simplify UI Progress For Now
+## Plan 10 - Candidate And Digested Flags Only
 
 Simple explanation:
-Detailed progress telemetry is out of scope for the redesign pass.
+Mission Control should not auto-patch the wiki in this phase.
 
 Source reason:
-David asked to remove the progress-event issue for now and just use a loader.
+David wants only candidate/digested bits for now. `digested = 1` means the answer was already turned into WikiLLM/Obsidian knowledge, but the digestion workflow itself does not matter now. Candidate flag authority is still TBD, so use the minimal default.
 
 Fix suggest:
-When a query starts, show a loader. When the CLI/API result returns, remove it and render the answer or error. Keep pre/post CLI logs in files for debugging, not as a detailed UI timeline.
+Add these columns:
+
+- `candidate INTEGER NOT NULL DEFAULT 0`
+- `digested INTEGER NOT NULL DEFAULT 0`
+
+For this phase:
+
+- Snoracle can set `candidate: true` in returned JSON.
+- The API stores that as `candidate = 1`.
+- `digested` remains `0` until a later workflow.
+- Disable/bypass automatic wiki patch job creation.
+- Do not implement a human candidate toggle yet unless it becomes necessary.
 
 Why this solves it:
-The UI stays simple while the architecture is being corrected.
+Useful answers are preserved for future knowledge digestion without pretending the patch workflow exists.
 
-## Plan 11 - Obsidian Placeholder Behavior
+## Plan 11 - Simple Loader Only
 
 Simple explanation:
-Obsidian does not exist yet, so accidental Obsidian calls should not add noisy text.
+Detailed progress events are out of scope for this phase.
 
 Source reason:
-The current worker returns 'אין Obsidian עדיין.' David wants an empty string if Obsidian is accidentally called.
+David asked to remove progress-event work for now and just use a loader.
 
 Fix suggest:
-Until the vault exists, Obsidian source handling should return an empty answer string and an empty evidence list.
+Show loader when a query starts. Remove loader when the CLI/API result returns or fails. Keep detailed runtime diagnostics in log files, not the UI.
 
 Why this solves it:
-The three-box answer shape remains possible without polluting every response with placeholder text.
+The frontend stays simple while the backend architecture is corrected.
+
+## Plan 12 - Obsidian Placeholder
+
+Simple explanation:
+Obsidian does not exist yet and should not add noisy placeholder text.
+
+Source reason:
+David said accidental Obsidian calls should currently return an empty string.
+
+Fix suggest:
+Until the vault exists, Obsidian source output should be empty: empty answer string, empty evidence list, and no noisy "no Obsidian yet" copy.
+
+Why this solves it:
+The three-box shape can remain without polluting every answer.
 
 ## Immediate Build Order
 
-1. Update TOOLS.md with the Mission Control answer schema and query-reasoning responsibility.
-2. Rewrite the adapter into api-cli-api: persist question, call OpenClaw agent, capture/store/dump output.
-3. Remove local source workers from the primary answer path; move source work into Snoracle/subagent instructions.
-4. Add candidate and digested columns; disable auto wiki patch jobs.
-5. Enforce HTTPS-only startup and HTTPS-only origins on 40006.
-6. Remove the visible gate link/value from HTML/JS.
-7. Simplify frontend progress to loader-on, loader-off.
-8. Implement local subprocess cancellation and research the OpenClaw-level hard-stop path.
+1. Update adapter to generate/store per-question OpenClaw session/run metadata.
+2. Call `openclaw agent` against `wiki-startup-for-startup` with the stored session id, 300 second timeout, xhigh thinking, JSON mode, and the TOOLS.md reminder.
+3. Store stdout/stderr/raw response and return raw output to the frontend regardless of JSON parse success.
+4. Remove local source workers from the primary answer path and rely on Snoracle/subagents for source querying.
+5. Add `candidate` and `digested` columns; stop automatic wiki patch jobs.
+6. Enforce HTTPS-only startup and HTTPS-only origins.
+7. Remove visible gate link/value from HTML/JS; drop unauthenticated ungated requests.
+8. Simplify UI progress to loader-on/loader-off.
+9. Implement cancellation layers and log what was actually stopped.
 
-## Evidence Checked While Rebuilding This Plan
+## Evidence Checked
 
-- openclaw agent --help confirms --agent, --session-id, --message, --thinking, --timeout, and --json.
-- openclaw sessions --help confirms sessions can be listed and explicit session ids can be targeted by agent turns.
-- openclaw tasks --help confirms background tasks have cancel support, but this has not yet been proven for foreground openclaw agent calls.
-- Current snoracle_adapter.py passes the whole prompt through --message and has prompt compaction logic.
-- Current config.py can fall back to HTTP and allows both HTTP and HTTPS origins.
-- Current server.py login page exposes the gate parameter in a visible link.
+- `openclaw agent` docs: supports `--agent`, `--session-id`, `--message`, `--thinking`, `--timeout`, and `--json`.
+- Agent send docs: `--agent <id>` targets a configured agent; `--session-id <id>` reuses an existing session.
+- Session management docs: each session key points at a current session id; session id is the transcript id.
+- Agent loop docs: OpenClaw runs are serialized per session and can end early by timeout, AbortSignal/cancel, Gateway disconnect, or RPC timeout.
+- CLI probe: `openclaw agent --agent wiki-startup-for-startup --session-id <id> --message ... --timeout 15 --json` accepts the selector combination and returns a top-level `runId`.
+- Tasks docs/help: `openclaw tasks cancel <lookup>` can cancel background tasks by task id, run id, or session key. Foreground CLI cancellation through this path is still best-effort, so Mission Control first kills the local subprocess group and logs the OpenClaw cancellation attempt result.
+- Current code proof: existing adapter passes full prompt via `--message` and has local prompt compaction constants; this should be replaced by a short action prompt.
