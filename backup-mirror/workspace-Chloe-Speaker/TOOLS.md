@@ -13,6 +13,16 @@ Things like:
 - Device nicknames
 - Anything environment-specific
 
+## WhatsApp Delivery Notes
+
+- Always include `channel: "whatsapp"` when using the `message` tool for delivery.
+- For audio, convert to WhatsApp-friendly formats first; prefer `.m4a` and `.ogg`.
+- When sending audio as a voice note, use `asVoice: true`.
+- Use `forceDocument: true` for files that should not be compressed by WhatsApp.
+- Do not rely on `mediaUrl` in RPC flows; place files under `/root/.openclaw/workspace/`, `/root/.openclaw/media/`, or `/tmp/.openclaw/`.
+- Keep files under the 50 MB default size limit.
+- Supported payloads include images, video, audio, PDF, Office docs, Markdown, TXT, JSON, YAML, and YML.
+
 ## Examples
 
 ```markdown

@@ -91,7 +91,7 @@ Add fields to the question table or a related `agent_runs` table:
 - `cli_stderr_path`
 - `raw_response_path`
 
-Use deterministic ids where possible, for example session ids derived from the question id plus a random suffix. Store raw command output under `kb/mission-control/runs/<question_id>/`.
+Use deterministic ids where possible, for example session ids derived from the question id plus a random suffix. Store raw command output under `sfs-mission-control/mission_control/logs/runs/<question_id>/`.
 
 Why this solves it:
 Cancellation, debugging, audit, and future session reuse become concrete instead of relying on an anonymous subprocess.

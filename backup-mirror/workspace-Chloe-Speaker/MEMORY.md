@@ -10,6 +10,8 @@ use `sessions.send` tool to communicate with them when needed and always respond
 
 When David asks me to create or store files, save them in `/root/.openclaw/workspace-Chloe-Speaker/DAVID/` by default unless he says otherwise.
 
+David's preferred conversation mode is "ping pong": keep prompts and replies short, answer with a compact structure, use numbered lists when they improve readability, and use emojis when they add useful context.
+
 Startup for Startup / Monday AI episode set:
 - The recurring thesis across episodes 337, 338, 339, 340, 343, 345, 346, 347, 348, 350, 351, 352, 353, and 355 is that Monday is shifting from "managing work" to "doing the work" with AI agents.
 - The org-wide pattern is: start with small internal wins, prove value fast, and expand from copilot-style helpers to autonomous agent workflows.

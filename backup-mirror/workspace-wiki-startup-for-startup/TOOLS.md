@@ -43,6 +43,14 @@ Add whatever helps you do your job. This is your cheat sheet.
 
 - [Agent workspace](/concepts/agent-workspace)
 
+## Backup
+
+- Layer 1 backup: `sfs-mission-control` is backed up to Bitbucket repo `https://bitbucket.org/Bresleveloper/wiki-kb.git`.
+- Bitbucket username: `Bresleveloper`
+- Token storage: workspace root `.env` as `BITBUCKET_ARIEL_WIKIKB`
+- Repository access token fallback: `sfs-mission-control/bitbucket.env` contains the Bitbucket repo access token instructions for `wiki-kb`; Git works with the documented `x-token-auth` URL form.
+- Runtime artifacts are intentionally excluded from the backup repo via `sfs-mission-control/.gitignore`.
+
 ## Mission Control
 
 ### Mission Control JSON Answer Shape

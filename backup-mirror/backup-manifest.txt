@@ -2,6 +2,6 @@ source_root=/root/.openclaw
 mirror_dir=/root/.openclaw/backup-mirror
 repo_remote=https://github.com/davidbigel/OPENCLAW-CHLOIE-BACKUP.git
 branch=main
-file_count=469
+file_count=486
 rules=root openclaw.json* + workspace root files + approved extensions from workspace-*
 excluded_dirs=memory logs .git .venv node_modules
