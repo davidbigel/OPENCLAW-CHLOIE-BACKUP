@@ -1,0 +1,2 @@
+[console_scripts]
+nblm-all = notebooklm_all_cli.main:main
