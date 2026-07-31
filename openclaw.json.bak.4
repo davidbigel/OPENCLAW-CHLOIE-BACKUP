@@ -1,7 +1,7 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.5.12",
-    "lastTouchedAt": "2026-06-11T13:55:44.718Z"
+    "lastTouchedAt": "2026-06-11T14:14:23.410Z"
   },
   "wizard": {
     "lastRunAt": "2026-05-17T10:24:35.252Z",
@@ -60,7 +60,22 @@
           "alsoAllow": [
             "web_fetch",
             "web_search",
-            "x_search"
+            "x_search",
+            "memory_get",
+            "memory_search",
+            "cron",
+            "agents_list",
+            "update_plan",
+            "image",
+            "image_generate",
+            "music_generate",
+            "tts",
+            "video_generate"
+          ],
+          "deny": [
+            "file_fetch",
+            "dir_list",
+            "dir_fetch"
           ]
         }
       },
@@ -136,7 +151,14 @@
       ],
       "groupPolicy": "allowlist",
       "debounceMs": 0,
-      "mediaMaxMb": 50
+      "mediaMaxMb": 50,
+      "accounts": {
+        "default": {
+          "name": "default",
+          "authDir": "/root/.openclaw/credentials/whatsapp/default",
+          "enabled": true
+        }
+      }
     }
   },
   "gateway": {

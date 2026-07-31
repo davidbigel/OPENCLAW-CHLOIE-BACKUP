@@ -22,6 +22,11 @@ Things like:
 - Do not rely on `mediaUrl` in RPC flows; place files under `/root/.openclaw/workspace/`, `/root/.openclaw/media/`, or `/tmp/.openclaw/`.
 - Keep files under the 50 MB default size limit.
 - Supported payloads include images, video, audio, PDF, Office docs, Markdown, TXT, JSON, YAML, and YML.
+- If a David WhatsApp message starts with the emoji 📥, treat it as a hard capture-only signal.
+- Copy all text after the emoji into the Google Docs Inbox at https://docs.google.com/document/d/1rFvsRM-NMOINFvti7OgVPzbN2amQmB_ItMU8t6RRtaU/edit?usp=drivesdk as the new first item.
+- Do not reinterpret the text after the emoji as an action to perform.
+- Do not improvise a different inbox target when that signal appears.
+- If the current toolset cannot actually write to Google Docs, say so explicitly instead of marking the capture as completed.
 
 ## Examples
 

@@ -1,7 +1,7 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.5.12",
-    "lastTouchedAt": "2026-06-11T13:59:18.535Z"
+    "lastTouchedAt": "2026-06-11T14:35:00.942Z"
   },
   "wizard": {
     "lastRunAt": "2026-05-17T10:24:35.252Z",
@@ -147,13 +147,51 @@
       "enabled": true,
       "dmPolicy": "pairing",
       "allowFrom": [
-        "+972544965032"
+        "+972544965032",
+        "+972559911448",
+        "+972542634114"
       ],
       "groupPolicy": "allowlist",
       "debounceMs": 0,
-      "mediaMaxMb": 50
+      "mediaMaxMb": 50,
+      "accounts": {
+        "default": {
+          "name": "default",
+          "authDir": "/root/.openclaw/credentials/whatsapp/default",
+          "allowFrom": [
+            "+972544965032",
+            "+972559911448",
+            "+972542634114"
+          ],
+          "enabled": true
+        }
+      }
     }
   },
+  "bindings": [
+    {
+      "agentId": "chloe-speaker",
+      "match": {
+        "channel": "whatsapp",
+        "accountId": "default",
+        "peer": {
+          "kind": "direct",
+          "id": "972559911448"
+        }
+      }
+    },
+    {
+      "agentId": "chloe-speaker",
+      "match": {
+        "channel": "whatsapp",
+        "accountId": "default",
+        "peer": {
+          "kind": "direct",
+          "id": "972542634114"
+        }
+      }
+    }
+  ],
   "gateway": {
     "port": 18789,
     "mode": "local",
@@ -319,6 +357,9 @@
         "enabled": true
       },
       "codex": {
+        "enabled": true
+      },
+      "whatsapp": {
         "enabled": true
       }
     }

@@ -1,7 +1,7 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.5.12",
-    "lastTouchedAt": "2026-06-30T14:03:10.474Z"
+    "lastTouchedAt": "2026-07-29T21:06:28.523Z"
   },
   "wizard": {
     "lastRunAt": "2026-05-17T10:24:35.252Z",
@@ -147,6 +147,14 @@
     "groupChat": {
       "visibleReplies": "message_tool"
     }
+  },
+  "session": {
+    "scope": "per-sender",
+    "dmScope": "per-channel-peer",
+    "resetTriggers": [
+      "/new",
+      "/reset"
+    ]
   },
   "commands": {
     "native": "auto",
@@ -374,6 +382,20 @@
       },
       "whatsapp": {
         "enabled": true
+      }
+    }
+  },
+  "browser": {
+    "profiles": {
+      "google": {
+        "driver": "existing-session",
+        "userDataDir": "/root/.chrome-profiles/leanagenticai",
+        "color": "#00AA00"
+      },
+      "user": {
+        "driver": "existing-session",
+        "userDataDir": "/root/.chrome-profiles/leanagenticai",
+        "color": "#00AA00"
       }
     }
   }

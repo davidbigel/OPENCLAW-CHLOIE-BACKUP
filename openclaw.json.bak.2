@@ -1,7 +1,7 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.5.12",
-    "lastTouchedAt": "2026-06-11T14:14:23.410Z"
+    "lastTouchedAt": "2026-06-11T15:26:57.116Z"
   },
   "wizard": {
     "lastRunAt": "2026-05-17T10:24:35.252Z",
@@ -110,6 +110,12 @@
         "name": "research-02-web-analysis",
         "workspace": "/root/.openclaw/workspace-research-02-web-analysis",
         "agentDir": "/root/.openclaw/agents/research-02-web-analysis/agent"
+      },
+      {
+        "id": "goog-v1-01-notebooklm",
+        "name": "GOOG-V1-01-NotebookLM",
+        "workspace": "/root/.openclaw/workspace-GOOG-V1-01-NotebookLM",
+        "agentDir": "/root/.openclaw/agents/goog-v1-01-notebooklm/agent"
       }
     ]
   },
@@ -139,6 +145,7 @@
   "commands": {
     "native": "auto",
     "nativeSkills": "auto",
+    "text": true,
     "restart": true,
     "ownerDisplay": "raw"
   },
@@ -147,7 +154,9 @@
       "enabled": true,
       "dmPolicy": "pairing",
       "allowFrom": [
-        "+972544965032"
+        "+972544965032",
+        "+972559911448",
+        "+972542634114"
       ],
       "groupPolicy": "allowlist",
       "debounceMs": 0,
@@ -156,11 +165,40 @@
         "default": {
           "name": "default",
           "authDir": "/root/.openclaw/credentials/whatsapp/default",
+          "allowFrom": [
+            "+972544965032",
+            "+972559911448",
+            "+972542634114"
+          ],
           "enabled": true
         }
       }
     }
   },
+  "bindings": [
+    {
+      "agentId": "chloe-speaker",
+      "match": {
+        "channel": "whatsapp",
+        "accountId": "default",
+        "peer": {
+          "kind": "direct",
+          "id": "+972544965032"
+        }
+      }
+    },
+    {
+      "agentId": "main",
+      "match": {
+        "channel": "whatsapp",
+        "accountId": "default",
+        "peer": {
+          "kind": "direct",
+          "id": "+972542634114"
+        }
+      }
+    }
+  ],
   "gateway": {
     "port": 18789,
     "mode": "local",
@@ -326,6 +364,9 @@
         "enabled": true
       },
       "codex": {
+        "enabled": true
+      },
+      "whatsapp": {
         "enabled": true
       }
     }

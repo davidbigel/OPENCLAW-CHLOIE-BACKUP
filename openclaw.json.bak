@@ -1,7 +1,7 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.5.12",
-    "lastTouchedAt": "2026-06-11T15:26:57.116Z"
+    "lastTouchedAt": "2026-07-29T21:03:55.556Z"
   },
   "wizard": {
     "lastRunAt": "2026-05-17T10:24:35.252Z",
@@ -116,6 +116,12 @@
         "name": "GOOG-V1-01-NotebookLM",
         "workspace": "/root/.openclaw/workspace-GOOG-V1-01-NotebookLM",
         "agentDir": "/root/.openclaw/agents/goog-v1-01-notebooklm/agent"
+      },
+      {
+        "id": "wiki-startup-for-startup",
+        "name": "wiki-startup-for-startup",
+        "workspace": "/root/.openclaw/workspace-wiki-startup-for-startup",
+        "agentDir": "/root/.openclaw/agents/wiki-startup-for-startup/agent"
       }
     ]
   },
@@ -368,6 +374,15 @@
       },
       "whatsapp": {
         "enabled": true
+      }
+    }
+  },
+  "browser": {
+    "profiles": {
+      "google": {
+        "driver": "existing-session",
+        "userDataDir": "/root/.chrome-profiles/leanagenticai",
+        "color": "#00AA00"
       }
     }
   }
