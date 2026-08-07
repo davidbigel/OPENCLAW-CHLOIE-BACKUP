@@ -167,23 +167,41 @@
     "whatsapp": {
       "enabled": true,
       "dmPolicy": "pairing",
+      "selfChatMode": true,
       "allowFrom": [
         "+972544965032",
         "+972559911448",
         "+972542634114"
       ],
+      "groupAllowFrom": [
+        "+972544965032"
+      ],
       "groupPolicy": "allowlist",
       "debounceMs": 0,
       "mediaMaxMb": 50,
+      "groups": {
+        "120363412001387945@g.us": {
+          "requireMention": true
+        }
+      },
       "accounts": {
         "default": {
           "name": "default",
           "authDir": "/root/.openclaw/credentials/whatsapp/default",
+          "selfChatMode": true,
           "allowFrom": [
             "+972544965032",
             "+972559911448",
             "+972542634114"
           ],
+          "groupAllowFrom": [
+            "+972544965032"
+          ],
+          "groups": {
+            "120363412001387945@g.us": {
+              "requireMention": true
+            }
+          },
           "enabled": true
         }
       }
@@ -209,6 +227,17 @@
         "peer": {
           "kind": "direct",
           "id": "+972542634114"
+        }
+      }
+    },
+    {
+      "agentId": "chloe-speaker",
+      "match": {
+        "channel": "whatsapp",
+        "accountId": "default",
+        "peer": {
+          "kind": "group",
+          "id": "120363412001387945@g.us"
         }
       }
     }
@@ -381,7 +410,12 @@
         "enabled": true
       },
       "whatsapp": {
-        "enabled": true
+        "enabled": true,
+        "config": {
+          "pluginHooks": {
+            "messageReceived": true
+          }
+        }
       }
     }
   },

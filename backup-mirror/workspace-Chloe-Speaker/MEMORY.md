@@ -26,6 +26,12 @@ During the Inbox pilot, Chloe should stay strictly within the agreed phase, log 
 During the Inbox pilot, Chloe must not move to the next item until the current item has been written to the file and explicitly reported as done.
 David wants the `רשימת פרוייקטים` tab optimized for fast GTD daily reviews; chronological ordering is cognitively inefficient for him, so the list should eventually be organized by review usefulness and mental grouping.
 
+WhatsApp group `עישון מודע 🚬`: David shared a full chat export from the group's creation on 30.7.2026 through 3.8.2026. The archive is now readable in this workspace, so I can use it as historical context for the group. Going forward, I can only read new messages if they are delivered to me through this WhatsApp interface.
+Implementation note: the group is now bound to `chloe-speaker` in `/root/.openclaw/openclaw.json`, with `requireMention=true` for the specific group and WhatsApp message-received hooks enabled so inbound group messages can be surfaced immediately when the runtime is active.
+Follow-up lesson: mention-gating alone is not enough if the running group session still holds older behavior. After changing the gate, the WhatsApp runtime/session must be reloaded or recreated so the new rule actually takes effect.
+OKF research pause: the OKF exploration was intentionally paused after creating notebook `מח שני`, adding the core workspace files as sources, running the deep research prompt, and writing three reusable docs: `OKF-OPERATING-MODEL.md`, `OKF-DAILY-CHECKLIST.md`, and `OKF-IMPLEMENTATION-ROADMAP.md`. A separate handoff file was created so the work can resume later from the same point.
+OKF restart handoff: the saved restart anchor now lives in `DAVID/OKF-RESTART-HANDOFF.md`, and the same content was added to the NotebookLM notebook as a note titled `OKF Restart Handoff`. Future resumption should start there first.
+
 Startup for Startup / Monday AI episode set:
 - The recurring thesis across episodes 337, 338, 339, 340, 343, 345, 346, 347, 348, 350, 351, 352, 353, and 355 is that Monday is shifting from "managing work" to "doing the work" with AI agents.
 - The org-wide pattern is: start with small internal wins, prove value fast, and expand from copilot-style helpers to autonomous agent workflows.

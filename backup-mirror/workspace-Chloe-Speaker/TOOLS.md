@@ -28,6 +28,13 @@ Things like:
 - Do not improvise a different inbox target when that signal appears.
 - If the current toolset cannot actually write to Google Docs, say so explicitly instead of marking the capture as completed.
 
+## Operating Protocol
+
+- Use `OPERATING_PROTOCOL.md` as the working ruleset for how to triage, execute, and verify work.
+- Keep short-lived chat context separate from durable workspace decisions.
+- Prefer the smallest useful file read, edit, and verification step.
+- Write reusable workflow decisions into files, not into transient memory.
+
 ## Examples
 
 ```markdown
