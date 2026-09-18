@@ -253,7 +253,7 @@
     },
     "auth": {
       "mode": "token",
-      "token": "089ddad5c261c8866c413a3c32302a2f9daab055ce6b9c9e"
+      "token": "${OPENCLAW_GATEWAY_TOKEN}"
     },
     "tailscale": {
       "mode": "off",
